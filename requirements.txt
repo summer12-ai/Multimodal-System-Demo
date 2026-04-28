@@ -1,0 +1,20 @@
+# ADB Multi-Modal State Recognition Demo
+# Note: PaddlePaddle 3.3.x has oneDNN compatibility issues on Windows CPU.
+#       Pin to 3.2.2 to avoid runtime crashes.
+
+# 1. PaddlePaddle inference engine (CPU)
+#    Use Tsinghua mirror for faster download in China:
+#    pip install paddlepaddle==3.2.2 -i https://pypi.tuna.tsinghua.edu.cn/simple
+paddlepaddle==3.2.2
+
+# 2. PaddleOCR offline OCR engine
+paddleocr>=2.7.0
+
+# 3. Image processing
+Pillow>=10.0.0
+
+# 4. Excel export
+openpyxl>=3.1.0
+
+# 5. Numerical utilities
+numpy>=1.24.0
