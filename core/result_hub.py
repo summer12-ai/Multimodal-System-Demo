@@ -25,7 +25,7 @@ class UnifiedResultHub:
         self.fusion_jsonl = (self.run_dir / "fused_states.jsonl").open("a", encoding="utf-8")
         self.traffic_jsonl = (self.run_dir / "traffic_events.jsonl").open("a", encoding="utf-8")
         self.ground_truth_jsonl = (self.run_dir / "ground_truth_eval.jsonl").open("a", encoding="utf-8")
-        self.fusion_csv_fh = (self.run_dir / "fused_states.csv").open("a", encoding="utf-8", newline="")
+        self.fusion_csv_fh = (self.run_dir / "fused_states.csv").open("a", encoding="utf-8-sig", newline="")
         self.fusion_csv = csv.DictWriter(
             self.fusion_csv_fh,
             fieldnames=[
@@ -42,6 +42,7 @@ class UnifiedResultHub:
                 "ocr_resolution",
                 "ocr_is_lag",
                 "ocr_fps",
+                "ocr_latency",
                 "ocr_errors",
                 "log_state",
                 "log_errors",
@@ -99,6 +100,7 @@ class UnifiedResultHub:
                 "ocr_resolution": (fusion.get("ocr") or {}).get("resolution", ""),
                 "ocr_is_lag": (fusion.get("ocr") or {}).get("is_lag", ""),
                 "ocr_fps": (fusion.get("ocr") or {}).get("fps", ""),
+                "ocr_latency": (fusion.get("ocr") or {}).get("latency", ""),
                 "ocr_errors": (fusion.get("ocr") or {}).get("errors", 0),
                 "log_state": (fusion.get("logcat") or {}).get("state", ""),
                 "log_errors": (fusion.get("logcat") or {}).get("errors", 0),

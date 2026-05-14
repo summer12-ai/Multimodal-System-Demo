@@ -33,6 +33,15 @@ APP_PACKAGE_MAP: Dict[str, str] = {
     "B站": "tv.danmaku.bili",
     "哔哩哔哩": "tv.danmaku.bili",
     "腾讯视频": "com.tencent.qqlive",
+    # 常见手游
+    "王者荣耀": "com.tencent.tmgp.sgame",
+    "和平精英": "com.tencent.tmgp.pubgmhd",
+    "原神": "com.miHoYo.Yuanshen",
+    "英雄联盟手游": "com.tencent.lolm",
+    "穿越火线": "com.tencent.tmgp.cf",
+    "蛋仔派对": "com.netease.party",
+    "QQ飞车": "com.tencent.tmgp.speedmobile",
+    "QQ飞车手游": "com.tencent.tmgp.speedmobile",
 }
 
 # ============================================================

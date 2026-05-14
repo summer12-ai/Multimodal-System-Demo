@@ -53,6 +53,22 @@ APP_LOG_FILTER_RULES: Dict[str, Dict[str, List[str]]] = {
         "packages": ["com.tencent.qqlive"],
         "keywords": ["qqlive", "tenvideo", "tencentvideo"],
     },
+    "王者荣耀": {
+        "packages": ["com.tencent.tmgp.sgame", "com.tencent.tmgp.sgamece"],
+        "keywords": ["tmgp", "sgame", "unity", "tencent", "moba"],
+    },
+    "和平精英": {
+        "packages": ["com.tencent.tmgp.pubgmhd", "com.tencent.ig"],
+        "keywords": ["pubgm", "tmgp", "tencent", "ue4"],
+    },
+    "英雄联盟手游": {
+        "packages": ["com.tencent.lolm"],
+        "keywords": ["lolm", "tencent", "wildrift", "unity"],
+    },
+    "原神": {
+        "packages": ["com.miHoYo.GenshinImpact", "com.miHoYo.Yuanshen"],
+        "keywords": ["mihoyo", "genshin", "yuanshen", "unity"],
+    },
 }
 
 
@@ -155,6 +171,8 @@ class LogcatModuleService:
         过滤策略：
         1) 有可用 PID 时：仅保留目标 App 进程日志。
         2) 无 PID 时：用 target_app 对应关键词做回退过滤。
+        3) 兜底：若既无 PID 也未命中关键词，保留 ERROR/FATAL 级别日志，
+           避免在未知包名时漏掉崩溃/网络错误等关键信号。
         """
         self._ensure_pid_cache_fresh()
         if self._allowed_pids:
@@ -166,6 +184,10 @@ class LogcatModuleService:
         for kw in keywords + packages:
             if kw in haystack:
                 return True
+
+        # 兜底：关键词/包名均未命中时，保留严重错误日志
+        if event.level in {"E", "F"}:
+            return True
         return False
 
     def _on_line(self, line: str):

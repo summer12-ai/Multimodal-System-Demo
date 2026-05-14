@@ -28,11 +28,15 @@ from .config import (
     APP_TO_CATEGORY,
     RESOLUTION_KEYWORDS,
     LAG_KEYWORDS,
-    FPS_PATTERN,
+    FPS_PATTERNS,
     RESOLUTION_CATEGORIES,
     FPS_CATEGORIES,
     APP_CACHE_SECONDS,
     MAX_IMAGE_LONG_SIDE,
+    GAME_LATENCY_APPS,
+    LATENCY_REGIONS,
+    LATENCY_PATTERNS,
+    CROP_TOP_RIGHT_RATIO,
 )
 from .image_utils import ImageProcessor
 from .ocr_engine import OCREngine
@@ -132,14 +136,42 @@ class Analyzer:
     @staticmethod
     def match_fps(texts: List[str]) -> str:
         """
-        从文本中匹配帧率，如 "60fps", "30 FPS"。
-        返回第一个匹配结果，统一小写格式如 "60fps"。
+        从文本中匹配帧率，如 "60fps", "FPS 59", "FPS59"。
+        返回第一个匹配结果，统一小写格式如 "59fps"。
+        对 OCR 粘连结果（如 FPS5910ms）做鲁棒处理。
         """
-        pattern = re.compile(FPS_PATTERN, re.IGNORECASE)
+        patterns = [re.compile(p, re.IGNORECASE) for p in FPS_PATTERNS]
         for text in texts:
-            m = pattern.search(text)
-            if m:
-                return m.group(0).lower().replace(" ", "")
+            for pattern in patterns:
+                m = pattern.search(text)
+                if m:
+                    digit = m.group(1)
+                    if not digit or not digit.isdigit():
+                        continue
+                    # 帧率通常 1~240；若数字过长（OCR 粘连），取前 2~3 位合理值
+                    if len(digit) > 3:
+                        for length in (3, 2):
+                            candidate = digit[:length]
+                            if 1 <= int(candidate) <= 240:
+                                return f"{candidate}fps"
+                        continue
+                    val = int(digit)
+                    if 1 <= val <= 240:
+                        return f"{digit}fps"
+        return ""
+
+    @staticmethod
+    def match_latency(texts: List[str]) -> str:
+        """
+        从文本中匹配游戏延迟值，如 "25ms", "Ping: 45", "延迟: 60"。
+        返回第一个匹配结果，保留原始格式。
+        """
+        compiled = [re.compile(p) for p in LATENCY_PATTERNS]
+        for text in texts:
+            for pattern in compiled:
+                m = pattern.search(text)
+                if m:
+                    return m.group(0)
         return ""
 
     # ----------------------- 核心分析 -----------------------
@@ -204,6 +236,25 @@ class Analyzer:
         if category in RESOLUTION_CATEGORIES:
             result["resolution"] = self.match_resolution(texts)
         if category in FPS_CATEGORIES:
-            result["fps"] = self.match_fps(texts)
+            fps = self.match_fps(texts)
+            if not fps:
+                # 全图未命中，对右上角重点区域裁剪后再识别
+                top_right = resized_processor.crop_top_right(CROP_TOP_RIGHT_RATIO)
+                tr_texts = self.ocr.recognize(top_right)
+                fps = self.match_fps(tr_texts)
+            result["fps"] = fps
+
+        # 5. 游戏延迟识别（仅针对已知有延迟显示的游戏）
+        latency = ""
+        if category == "（云）游戏" and app_name in GAME_LATENCY_APPS:
+            latency = self.match_latency(texts)
+            if not latency:
+                # 全图未命中，对重点区域裁剪拼接后再识别
+                proc = ImageProcessor(resized)
+                region_images = [proc.crop_by_ratio(*r) for r in LATENCY_REGIONS]
+                stacked = ImageProcessor.stack_vertical(region_images)
+                region_texts = self.ocr.recognize(stacked)
+                latency = self.match_latency(region_texts)
+        result["latency"] = latency
 
         return result

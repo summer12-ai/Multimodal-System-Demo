@@ -10,6 +10,7 @@ import os
 
 from config import ProjectConfig
 from core import MasterOrchestrator, OrchestratorConfig
+from ocr.config import GAME_LATENCY_APPS
 
 
 def parse_args():
@@ -41,6 +42,9 @@ def main():
             llm_api_key = os.getenv("DASHSCOPE_API_KEY", "")
         else:
             llm_api_key = os.getenv("OPENAI_API_KEY", "")
+    if args.target_app in GAME_LATENCY_APPS:
+        print(f"[main] 检测到目标应用 \"{args.target_app}\" 支持游戏延迟识别，OCR 模块将启用延迟检测")
+
     proj_cfg = ProjectConfig(
         target_app=args.target_app,
         duration_minutes=args.duration_min,

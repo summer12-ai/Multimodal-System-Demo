@@ -24,7 +24,7 @@ class ResultManager:
     """
 
     # 终端表格列定义（与 Excel 保持一致）
-    COLUMNS = ["时间戳", "业务大类", "具体软件", "分辨率", "是否卡顿", "帧率"]
+    COLUMNS = ["时间戳", "业务大类", "具体软件", "分辨率", "是否卡顿", "帧率", "延迟"]
 
     def __init__(self, max_display_rows: int = 10, category: str = "", app_name: str = ""):
         """
@@ -81,6 +81,7 @@ class ResultManager:
                 row.get("分辨率", ""),
                 row.get("是否卡顿", ""),
                 row.get("帧率", ""),
+                row.get("延迟", ""),
             ])
 
     def save(self) -> Optional[str]:

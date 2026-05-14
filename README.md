@@ -1,34 +1,34 @@
-# ADB Multi-Modal State Recognition Demo
+# ADB 多模态状态识别演示
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 
-A master-controlled multi-module demo for real-time Android app state recognition via **OCR + Logcat + Traffic** fusion.
+一个主控多模块演示项目，通过 **OCR + Logcat + Traffic** 融合实现实时 Android 应用状态识别。
 
-## Overview
+## 概述
 
-This project unifies three sensing modalities under a single orchestrator:
+本项目将三种感知模态统一在单一编排器下：
 
-- **OCR Module**: ADB screenshot + PaddleOCR offline recognition. Extracts resolution, lag hints, and FPS from UI text.
-- **Logcat Module**: Real-time `adb logcat` collection with structured parsing, template normalization, time-window rule detection, and optional LLM semantic enhancement.
-- **Traffic Module**: Uses root privileges to collect network stats (`dumpsys netstats`, `/proc/<pid>/net/tcp`) and packet-level captures (`tcpdump`). Identifies playback states, buffering, and network issues. Serves as **Ground Truth** to evaluate OCR/Logcat accuracy.
+- **OCR 模块**：ADB 截图 + PaddleOCR 离线识别。从 UI 文本中提取分辨率、卡顿提示、FPS 及游戏时延（ms）。
+- **Logcat 模块**：实时 `adb logcat` 采集，支持结构化解析、模板归一化、时间窗口规则检测，以及可选的 LLM 语义增强。
+- **Traffic 模块**：使用 root 权限采集网络统计信息（`dumpsys netstats`、`/proc/<pid>/net/tcp`）和数据包级捕获（`tcpdump`）。识别播放状态、缓冲和网络问题。作为评估 OCR/Logcat 准确性的**基准真值（Ground Truth）**。
 
-The master layer fuses outputs from all three modules, renders a unified dashboard, and archives structured results.
+主控层融合所有三个模块的输出，渲染统一监控面板，并归档结构化结果。
 
 ---
 
-## Directory Structure
+## 目录结构
 
 ```
 .
-├── main.py                  # Entry point
-├── config.py                # Project-level configuration
+├── main.py                  # 入口文件
+├── config.py                # 项目级配置
 ├── core/
-│   ├── orchestrator.py      # Master scheduler (OCR + Logcat + Traffic)
-│   ├── fusion.py            # Multi-modal state fusion rules
-│   ├── dashboard.py         # Unified terminal monitor
-│   └── result_hub.py        # Unified output (JSONL + CSV)
-├── ocr/                     # OCR submodule
+│   ├── orchestrator.py      # 主调度器（OCR + Logcat + Traffic）
+│   ├── fusion.py            # 多模态状态融合规则
+│   ├── dashboard.py         # 统一终端监控
+│   └── result_hub.py        # 统一输出（JSONL + CSV）
+├── ocr/                     # OCR 子模块
 │   ├── service.py
 │   ├── adb_controller.py
 │   ├── analyzer.py
@@ -36,7 +36,7 @@ The master layer fuses outputs from all three modules, renders a unified dashboa
 │   ├── image_utils.py
 │   ├── ocr_engine.py
 │   └── result_manager.py
-├── logcat/                  # Logcat submodule
+├── logcat/                  # Logcat 子模块
 │   ├── service.py
 │   ├── collector.py
 │   ├── parser.py
@@ -45,7 +45,7 @@ The master layer fuses outputs from all three modules, renders a unified dashboa
 │   ├── llm_analyzer.py
 │   ├── models.py
 │   └── prompt_templates.py
-├── traffic/                 # Traffic submodule
+├── traffic/                 # Traffic 子模块
 │   ├── service.py
 │   ├── ground_truth.py
 │   ├── config.py
@@ -59,22 +59,22 @@ The master layer fuses outputs from all three modules, renders a unified dashboa
 │   └── analyzer/
 │       ├── bandwidth_analyzer.py
 │       └── state_detector.py
-├── results/                 # Auto-created run_YYYYMMDD_HHMMSS/
+├── results/                 # 自动创建 run_YYYYMMDD_HHMMSS/
 ├── requirements.txt
 └── README.md
 ```
 
 ---
 
-## Requirements
+## 环境要求
 
-- **OS**: Windows 10/11 (Linux/macOS also supported)
-- **Python**: 3.10 ~ 3.12
-- **ADB**: Installed and in `PATH`
-- **Android Device**: USB debugging enabled
-- **Root** (for Traffic packet capture): Device must be rooted, or use `--disable-traffic-pcap` to keep only the stats layer.
+- **操作系统**：Windows 10/11（也支持 Linux/macOS）
+- **Python**：3.10 ~ 3.12
+- **ADB**：已安装并配置到 `PATH`
+- **Android 设备**：已开启 USB 调试
+- **Root**（用于 Traffic 数据包捕获）：设备必须已 root，或使用 `--disable-traffic-pcap` 仅保留统计层
 
-### Dependencies
+### 依赖安装
 
 ```bash
 python -m venv .venv
@@ -83,118 +83,127 @@ source .venv/bin/activate  # Linux/macOS
 pip install -r requirements.txt
 ```
 
-| Package | Version | Purpose |
+| 包名 | 版本 | 用途 |
 |---------|---------|---------|
-| `paddlepaddle` | `==3.2.2` | OCR inference engine |
-| `paddleocr` | `>=2.7.0` | Offline OCR |
-| `Pillow` | `>=10.0.0` | Image processing |
-| `openpyxl` | `>=3.1.0` | Excel export |
-| `numpy` | `>=1.24.0` | Numerical utilities |
+| `paddlepaddle` | `==3.2.2` | OCR 推理引擎 |
+| `paddleocr` | `>=2.7.0` | 离线 OCR |
+| `Pillow` | `>=10.0.0` | 图像处理 |
+| `openpyxl` | `>=3.1.0` | Excel 导出 |
+| `numpy` | `>=1.24.0` | 数值工具 |
 
-> **Note**: `paddlepaddle==3.2.2` is pinned because 3.3.x has oneDNN compatibility issues on Windows CPU.
+> **注意**：`paddlepaddle==3.2.2` 被固定是因为 3.3.x 在 Windows CPU 上存在 oneDNN 兼容性问题。
 
 ---
 
-## Quick Start
+## 快速开始
 
-### 1. Run with default settings (continuous mode)
+### 1. 使用默认设置运行（持续模式）
 
 ```bash
 python main.py --target-app 虎牙直播
 ```
 
-### 2. Run for a limited duration (e.g., 1 minute)
+### 2. 限时运行（例如 1 分钟）
 
 ```bash
 python main.py --target-app 虎牙直播 --duration-min 1
 ```
 
-### 3. Disable Traffic module (if device is not rooted)
+### 3. 禁用 Traffic 模块（如果设备未 root）
 
 ```bash
 python main.py --target-app 虎牙直播 --disable-traffic
 ```
 
-### 4. Use LLM semantic enhancement (optional)
+### 4. 使用 LLM 语义增强（可选）
 
 ```bash
 # OpenAI
 export OPENAI_API_KEY="your-key"
 python main.py --target-app 虎牙直播 --enable-llm-log-analysis
 
-# Alibaba Qwen
+# 阿里云通义千问
 export DASHSCOPE_API_KEY="your-key"
 python main.py --target-app 虎牙直播 --enable-llm-log-analysis --llm-provider qwen --llm-model qwen-plus
 ```
 
 ---
 
-## CLI Arguments
+## 命令行参数
 
-| Argument | Default | Description |
+| 参数 | 默认值 | 说明 |
 |----------|---------|-------------|
-| `--target-app` | `虎牙直播` | Target app name (for OCR prior) |
-| `--duration-min` | `None` | Run duration in minutes (infinite if not set) |
-| `--device-id` | `None` | ADB device serial (for multi-device) |
-| `--refresh-sec` | `1.0` | Dashboard refresh interval |
-| `--log-window-sec` | `12` | Logcat time window length |
-| `--enable-llm-log-analysis` | `False` | Enable LLM semantic enhancement |
-| `--llm-provider` | `openai` | LLM provider (`openai` or `qwen`) |
-| `--llm-model` | `gpt-4.1-mini` | LLM model name |
-| `--llm-api-key` | `""` | LLM API key (falls back to env var) |
-| `--llm-base-url` | `""` | Custom chat/completions endpoint |
-| `--llm-timeout-sec` | `10` | LLM request timeout |
-| `--llm-min-interval-sec` | `10` | Minimum LLM call interval |
-| `--disable-traffic` | `False` | Disable Traffic module |
-| `--traffic-package` | `None` | Target package name (e.g., `com.duowan.kiwi`) |
-| `--disable-traffic-pcap` | `False` | Disable tcpdump, keep stats layer only |
-| `--traffic-window-sec` | `12.0` | Traffic state machine window |
+| `--target-app` | `虎牙直播` | 目标应用名称（用于 OCR 优先） |
+| `--duration-min` | `None` | 运行时长（分钟），未设置则无限运行 |
+| `--device-id` | `None` | ADB 设备序列号（多设备时使用） |
+| `--refresh-sec` | `1.0` | 监控面板刷新间隔 |
+| `--log-window-sec` | `12` | Logcat 时间窗口长度 |
+| `--enable-llm-log-analysis` | `False` | 启用 LLM 语义增强 |
+| `--llm-provider` | `openai` | LLM 提供商（`openai` 或 `qwen`） |
+| `--llm-model` | `gpt-4.1-mini` | LLM 模型名称 |
+| `--llm-api-key` | `""` | LLM API 密钥（回退到环境变量） |
+| `--llm-base-url` | `""` | 自定义 chat/completions 端点 |
+| `--llm-timeout-sec` | `10` | LLM 请求超时时间 |
+| `--llm-min-interval-sec` | `10` | LLM 调用最小间隔 |
+| `--disable-traffic` | `False` | 禁用 Traffic 模块 |
+| `--traffic-package` | `None` | 目标包名（例如 `com.duowan.kiwi`） |
+| `--disable-traffic-pcap` | `False` | 禁用 tcpdump，仅保留统计层 |
+| `--traffic-window-sec` | `12.0` | Traffic 状态机窗口 |
 
 ---
 
-## Outputs
+## 输出
 
-Each run creates a timestamped directory under `results/run_YYYYMMDD_HHMMSS/`:
+每次运行会在 `results/run_YYYYMMDD_HHMMSS/` 下创建带时间戳的目录：
 
-| File | Description |
+| 文件 | 说明 |
 |------|-------------|
-| `ocr_events.jsonl` | OCR recognition results |
-| `log_events.jsonl` | Raw logcat events |
-| `detector_events.jsonl` | Logcat detector snapshots |
-| `traffic_events.jsonl` | Traffic module snapshots |
-| `ground_truth_eval.jsonl` | Ground truth alignment evaluations |
-| `fused_states.jsonl` | Fusion state decisions |
-| `fused_states.csv` | Fusion state table (CSV) |
+| `ocr_events.jsonl` | OCR 识别结果 |
+| `log_events.jsonl` | 原始 logcat 事件 |
+| `detector_events.jsonl` | Logcat 检测器快照 |
+| `traffic_events.jsonl` | Traffic 模块快照 |
+| `ground_truth_eval.jsonl` | 基准真值对齐评估 |
+| `fused_states.jsonl` | 融合状态决策 |
+| `fused_states.csv` | 融合状态表（CSV） |
 
-The terminal dashboard displays real-time summaries for all modules and the fused state.
-
----
-
-## Architecture
-
-### State Fusion Rules
-
-Traffic acts as the physical-layer ground truth. When Traffic confidence >= 0.90, its state overrides OCR/Logcat decisions.
-
-### Traffic Module Pipeline
-
-1. **Stats Layer**: Periodic `dumpsys netstats --uid <uid>`, `/proc/<pid>/net/tcp`, `dumpsys wifi` for cumulative bytes, active connections, and RSSI.
-2. **Packet Layer**: `adb shell tcpdump` on the active interface (`wlan0` preferred) to capture packet sizes, TCP flags, and HTTP headers.
-3. **Content Layer**: Sniff HLS M3U8 (`#EXT-X-STREAM-INF`), DASH MPD (`<Representation>`), and FLV headers from tcpdump `-A` ASCII payloads.
-4. **State Machine**: Bandwidth time-series analysis (burst/drop/sustained low) + protocol metadata → structured state output.
-5. **Ground Truth**: Aligns OCR/Logcat results with Traffic in a 2-second sliding window, reporting per-modality accuracy and confusion matrices.
+终端监控面板会实时显示所有模块和融合状态的摘要。
 
 ---
 
-## Known Limitations
+## 架构
 
-- Log pattern recognition is heuristic and keyword-dependent; OEM/ROM differences may affect recall.
-- Traffic protocol deep-parsing (HLS/DASH payload) relies on tcpdump ASCII output; TLS/QUIC encrypted streams cannot be parsed.
-- OCR + Logcat fusion rules are first-generation heuristic rules; data-driven calibration is future work.
-- Traffic `pcap` collector may miss packets during interface auto-detection retries (device-specific).
+### OCR 模块增强：游戏时延识别
+
+针对（云）游戏类应用，OCR 模块新增网络延迟识别能力：
+
+- **支持游戏**：王者荣耀、和平精英、英雄联盟手游、暗区突围等 20+ 款主流手游。
+- **检测区域**：左上角、右上角、左下角、底部中央等游戏 UI 常见延迟显示位置。
+- **匹配格式**：`20ms`、`Ping:25`、`Latency: 30`、`延迟: 60`、`网络 45` 等。
+- **实现方式**：先对全图 OCR 识别，若未命中，则对重点检测区域裁剪拼接后二次识别，提升小字/半透明 UI 的识别率。
+
+### 状态融合规则
+
+Traffic 作为物理层基准真值。当 Traffic 置信度 >= 0.90 时，其状态将覆盖 OCR/Logcat 的决策。
+
+### Traffic 模块流水线
+
+1. **统计层**：周期性执行 `dumpsys netstats --uid <uid>`、`/proc/<pid>/net/tcp`、`dumpsys wifi`，获取累积字节数、活动连接和 RSSI。
+2. **数据包层**：在活动接口上（优先 `wlan0`）执行 `adb shell tcpdump`，捕获数据包大小、TCP 标志和 HTTP 头。
+3. **内容层**：从 tcpdump `-A` ASCII 负载中嗅探 HLS M3U8（`#EXT-X-STREAM-INF`）、DASH MPD（`<Representation>`）和 FLV 头。
+4. **状态机**：带宽时序分析（突发/下降/持续低）+ 协议元数据 → 结构化状态输出。
+5. **基准真值**：在 2 秒滑动窗口中对齐 OCR/Logcat 结果与 Traffic，报告各模态准确率和混淆矩阵。
 
 ---
 
-## License
+## 已知限制
 
-MIT License — feel free to use, modify, and distribute.
+- 日志模式识别基于启发式和关键词；OEM/ROM 差异可能影响召回率。
+- Traffic 协议深度解析（HLS/DASH 负载）依赖 tcpdump ASCII 输出；TLS/QUIC 加密流无法解析。
+- OCR + Logcat 融合规则是第一代启发式规则；数据驱动校准是未来工作。
+- Traffic `pcap` 采集器在接口自动检测重试期间可能丢包（设备相关）。
+
+---
+
+## 许可证
+
+MIT 许可证 — 可自由使用、修改和分发。

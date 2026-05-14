@@ -27,6 +27,7 @@ def fuse_states(ocr_snapshot: Dict[str, Any], log_snapshot: Dict[str, Any], traf
     ocr_lag = (ocr_snapshot.get("latest_result") or {}).get("是否卡顿", "否")
     ocr_resolution = (ocr_snapshot.get("latest_result") or {}).get("分辨率", "")
     ocr_fps = (ocr_snapshot.get("latest_result") or {}).get("帧率", "")
+    ocr_latency = (ocr_snapshot.get("latest_result") or {}).get("延迟", "")
     rule_state_raw = (log_snapshot.get("state") or {}).get("state", "UNKNOWN")
     rule_state = _map_rule_state(rule_state_raw)
     rule_conf = float((log_snapshot.get("state") or {}).get("confidence", 0.0))
@@ -124,6 +125,7 @@ def fuse_states(ocr_snapshot: Dict[str, Any], log_snapshot: Dict[str, Any], traf
             "resolution": ocr_resolution,
             "is_lag": ocr_lag,
             "fps": ocr_fps,
+            "latency": ocr_latency,
             "frames": ocr_snapshot.get("frames", 0),
             "errors": ocr_snapshot.get("errors", 0),
         },

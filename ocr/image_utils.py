@@ -84,6 +84,21 @@ class ImageProcessor:
         left = self.width - w
         return self.image.crop((left, 0, self.width, h))
 
+    def crop_by_ratio(self, left: float, top: float, right: float, bottom: float) -> Image.Image:
+        """
+        按百分比裁剪任意矩形区域。
+        :param left: 左边界比例（0.0 ~ 1.0）
+        :param top: 上边界比例（0.0 ~ 1.0）
+        :param right: 右边界比例（0.0 ~ 1.0）
+        :param bottom: 下边界比例（0.0 ~ 1.0）
+        :return: 裁剪后的 Image
+        """
+        l = int(self.width * left)
+        t = int(self.height * top)
+        r = int(self.width * right)
+        b = int(self.height * bottom)
+        return self.image.crop((l, t, r, b))
+
     # ----------------------- 区域拼接 -----------------------
 
     @staticmethod

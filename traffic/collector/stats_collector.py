@@ -79,12 +79,31 @@ class StatsCollector:
     # ----------------------- PID 管理 -----------------------
 
     def _refresh_pid(self) -> Optional[str]:
+        # 方法1: pidof（部分 Android 支持包名）
         stdout = self._shell(["pidof", self.package_name])
         pid = stdout.strip().split()[0] if stdout.strip() else None
         if pid and pid.isdigit():
             self._cached_pid = pid
             self._last_pid_refresh = time.time()
             return pid
+
+        # 方法2: pgrep -f（部分 Android 支持）
+        stdout = self._shell(["pgrep", "-f", self.package_name])
+        pid = stdout.strip().split()[0] if stdout.strip() else None
+        if pid and pid.isdigit():
+            self._cached_pid = pid
+            self._last_pid_refresh = time.time()
+            return pid
+
+        # 方法3: dumpsys activity pids
+        stdout = self._shell(["dumpsys", "activity", "pids", self.package_name])
+        for line in stdout.splitlines():
+            line = line.strip()
+            if line.isdigit():
+                self._cached_pid = line
+                self._last_pid_refresh = time.time()
+                return line
+
         return self._cached_pid
 
     def _ensure_pid_fresh(self):
@@ -107,10 +126,40 @@ class StatsCollector:
 
     def _read_netstats(self) -> tuple:
         """
-        解析 dumpsys netstats --uid <uid>
-        返回 (rx_bytes, tx_bytes)，失败返回 (-1, -1)
-        兼容带 --tag 和不带 --tag 的 Android 版本。
+        解析 dumpsys netstats 获取目标 UID 的累计流量。
+
+        优先解析 mAppUidStatsMap 段落（Android 10+ 实时累计值，可计算 delta 速率）。
+        回退到 --uid 参数的历史聚合数据（旧版 Android 兼容）。
+        返回 (rx_bytes, tx_bytes)，失败返回 (-1, -1)。
         """
+        # 方式1: 解析 mAppUidStatsMap（主流 Android 10+ 格式）
+        stdout = self._shell(["dumpsys", "netstats"])
+        if stdout:
+            lines = stdout.splitlines()
+            in_app_uid_map = False
+            for i, line in enumerate(lines):
+                if line.strip() == "mAppUidStatsMap:":
+                    in_app_uid_map = True
+                    continue
+                if in_app_uid_map:
+                    stripped = line.strip()
+                    # 跳过标题行
+                    if stripped == "uid rxBytes rxPackets txBytes txPackets":
+                        continue
+                    # 段落结束: 遇到非缩进行（数据行一般有缩进）
+                    if stripped and not line.startswith(" "):
+                        break
+                    parts = stripped.split()
+                    if len(parts) >= 5 and parts[0].isdigit():
+                        if int(parts[0]) == self.uid:
+                            return int(parts[1]), int(parts[3])
+                    # 空行后跟着非缩进内容，视为段落结束
+                    if not stripped and i + 1 < len(lines):
+                        next_line = lines[i + 1]
+                        if next_line.strip() and not next_line.startswith(" ") and "uid" not in next_line:
+                            break
+
+        # 方式2: 带 --uid 参数的历史聚合数据（兼容旧版 Android）
         for tag_opt in [["--uid", str(self.uid), "--tag"], ["--uid", str(self.uid)]]:
             stdout = self._shell(["dumpsys", "netstats"] + tag_opt)
             if not stdout:

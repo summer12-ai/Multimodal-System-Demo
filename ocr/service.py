@@ -100,6 +100,7 @@ class OcrModuleService:
                     "分辨率": analysis.get("resolution", ""),
                     "是否卡顿": analysis.get("is_lag", "否"),
                     "帧率": analysis.get("fps", ""),
+                    "延迟": analysis.get("latency", ""),
                 }
                 row = self._apply_resolution_sticky(row)
                 with self._lock:

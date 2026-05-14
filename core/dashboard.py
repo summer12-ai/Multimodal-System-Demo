@@ -52,7 +52,7 @@ def render_dashboard(
     print(
         f"frames={ocr_snapshot.get('frames', 0)} | errors={ocr_snapshot.get('errors', 0)} | "
         f"resolution={_safe(ocr_latest.get('分辨率', ''))} | lag={_safe(ocr_latest.get('是否卡顿', ''))} | "
-        f"fps={_safe(ocr_latest.get('帧率', ''))}"
+        f"fps={_safe(ocr_latest.get('帧率', ''))} | latency={_safe(ocr_latest.get('延迟', ''))}"
     )
     print("-" * 100)
     print("[Logcat 子模块]")
