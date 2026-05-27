@@ -13,6 +13,7 @@ from .result_hub import UnifiedResultHub
 from logcat import LogcatModuleService
 from ocr import OcrModuleService
 from traffic import TrafficModuleService
+from local_latency import LocalLatencyModuleService
 
 
 @dataclass
@@ -34,6 +35,9 @@ class OrchestratorConfig:
     traffic_package_name: Optional[str] = None
     enable_traffic_pcap: bool = True
     traffic_window_seconds: float = 12.0
+    enable_local_latency: bool = True
+    local_latency_package_name: Optional[str] = None
+    local_latency_interval: float = 1.5
 
 
 class MasterOrchestrator:
@@ -72,7 +76,24 @@ class MasterOrchestrator:
         else:
             self.traffic_service = None
 
-    def _collect_recent_events(self, ocr_snapshot, log_snapshot, traffic_snapshot, fusion):
+        # 本地时延服务
+        if cfg.enable_local_latency:
+            ll_pkg = cfg.local_latency_package_name or self._resolve_local_latency_package(cfg.target_app)
+            self.local_latency_service = LocalLatencyModuleService(
+                package_name=ll_pkg,
+                device_id=cfg.device_id,
+                collect_interval=cfg.local_latency_interval,
+            )
+        else:
+            self.local_latency_service = None
+
+    @staticmethod
+    def _resolve_local_latency_package(target_app: str) -> str:
+        """根据目标应用名解析本地时延采集所需的包名（与 traffic 模块共用映射）。"""
+        from traffic.config import APP_PACKAGE_MAP
+        return APP_PACKAGE_MAP.get(target_app, target_app)
+
+    def _collect_recent_events(self, ocr_snapshot, log_snapshot, traffic_snapshot, local_latency_snapshot, fusion):
         events = []
         ocr_latest = ocr_snapshot.get("latest_result") or {}
         if ocr_latest:
@@ -97,6 +118,15 @@ class MasterOrchestrator:
                     f"GT ocr_match={acc.get('ocr_match')} log_match={acc.get('log_match')} "
                     f"3way={acc.get('three_way_agree')}"
                 )
+        if local_latency_snapshot:
+            ll_latest = local_latency_snapshot.get("latest_result") or {}
+            if ll_latest:
+                events.append(
+                    f"LOCAL_LATENCY state={ll_latest.get('state', 'N/A')} "
+                    f"conf={ll_latest.get('confidence', 0.0):.2f} "
+                    f"fps={ll_latest.get('fps', 0):.1f} "
+                    f"jank={ll_latest.get('jank_count', 0)}"
+                )
         self._recent_events.extend(events)
         self._recent_events = self._recent_events[-20:]
 
@@ -110,6 +140,12 @@ class MasterOrchestrator:
             except RuntimeError as e:
                 print(f"[WARN] Traffic 模块启动失败: {e}")
                 self.traffic_service = None
+        if self.local_latency_service:
+            try:
+                self.local_latency_service.start()
+            except RuntimeError as e:
+                print(f"[WARN] LocalLatency 模块启动失败: {e}")
+                self.local_latency_service = None
         try:
             while True:
                 runtime = int(time.time() - start)
@@ -119,6 +155,7 @@ class MasterOrchestrator:
                 ocr_snapshot = self.ocr_service.get_snapshot()
                 log_snapshot = self.log_service.get_snapshot()
                 traffic_snapshot = self.traffic_service.get_snapshot() if self.traffic_service else {}
+                local_latency_snapshot = self.local_latency_service.get_snapshot() if self.local_latency_service else {}
                 ocr_latest = ocr_snapshot.get("latest_result") or {}
                 llm_result = self.log_service.analyze_window_with_llm(
                     ocr_hint={
@@ -129,7 +166,19 @@ class MasterOrchestrator:
                 )
                 if llm_result:
                     log_snapshot["llm"] = llm_result
-                fusion = fuse_states(ocr_snapshot, log_snapshot, traffic_snapshot, target_app=self.cfg.target_app)
+                # 生成本地时延标注样本（与 OCR/Traffic 对齐后）
+                ll_label = None
+                if self.local_latency_service:
+                    network_state = (traffic_snapshot.get("state") or {}).get("state", "")
+                    ll_label = self.local_latency_service.generate_label(
+                        ocr_latest=ocr_snapshot.get("latest_result"),
+                        network_state=network_state,
+                    )
+
+                fusion = fuse_states(
+                    ocr_snapshot, log_snapshot, traffic_snapshot, local_latency_snapshot,
+                    target_app=self.cfg.target_app,
+                )
 
                 if ocr_snapshot.get("latest_result"):
                     self.result_hub.append_ocr(ocr_snapshot["latest_result"])
@@ -154,6 +203,10 @@ class MasterOrchestrator:
                     traffic_snapshot["accuracy"] = acc
                     self.result_hub.append_traffic(traffic_snapshot)
                     self.result_hub.append_ground_truth(acc)
+                if local_latency_snapshot:
+                    self.result_hub.append_local_latency(local_latency_snapshot)
+                if ll_label:
+                    self.result_hub.append_local_latency_label(ll_label.to_dict())
                 self.result_hub.append_fusion(fusion)
 
                 # 定期打印累计准确率报告
@@ -168,7 +221,7 @@ class MasterOrchestrator:
                         )
                     self._last_accuracy_report_at = time.time()
 
-                self._collect_recent_events(ocr_snapshot, log_snapshot, traffic_snapshot, fusion)
+                self._collect_recent_events(ocr_snapshot, log_snapshot, traffic_snapshot, local_latency_snapshot, fusion)
                 render_dashboard(
                     runtime_sec=runtime,
                     target_app=self.cfg.target_app,
@@ -176,10 +229,13 @@ class MasterOrchestrator:
                     ocr_snapshot=ocr_snapshot,
                     log_snapshot=log_snapshot,
                     traffic_snapshot=traffic_snapshot,
+                    local_latency_snapshot=local_latency_snapshot,
                     recent_events=self._recent_events,
                 )
                 time.sleep(self.cfg.dashboard_refresh_seconds)
         finally:
+            if self.local_latency_service:
+                self.local_latency_service.stop()
             if self.traffic_service:
                 self.traffic_service.stop()
             self.log_service.stop()

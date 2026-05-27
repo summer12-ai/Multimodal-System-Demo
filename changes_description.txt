@@ -1,0 +1,311 @@
+================================================================================
+  代码改动说明文档 —— 基于 SurfaceFlinger + Perfetto 的本地时延标注数据构建
+================================================================================
+
+一、改动背景
+------------
+根据《移动游戏网络时延与本地时延前沿识别技术调研报告》第 3.2.2 节的核心结论：
+
+  "Android 系统通过 `dumpsys SurfaceFlinger --latency` 命令可直接输出最多 128 帧的
+   三元组时间戳（应用开始绘制时间 A、vsync 前 SF 提交时间 B、SF 提交完成时间 C），
+   精度为纳秒级，完全无需 root 权限。这是目前非侵入式本地时延识别中精度最高、
+   最可靠的数据来源。"
+
+  "SurfaceFlinger 和 Perfetto 工具的组合，构成了本地帧生成时延识别的黄金标准方案。
+   该方案完全非侵入式，精度达纳秒级，可直接用于构建高质量的本地时延标注数据。"
+
+本次改动在现有 OCR + Logcat + Traffic 三层架构基础上，新增第四层 "Local Latency" 模块，
+实现非侵入式帧级本地时延采集、分析与高质量标注数据生成。
+
+================================================================================
+二、新增文件（5 个）
+================================================================================
+
+1. local_latency/__init__.py
+   --------------------------
+   模块入口文件，导出 LocalLatencyModuleService、FrameLatencyRecord、
+   LocalLatencySnapshot、LocalLatencyLabel 四个核心类。
+
+2. local_latency/models.py
+   ------------------------
+   定义本地时延子模块的全部数据模型：
+
+   • FrameLatencyRecord
+     - 对应 SurfaceFlinger --latency 输出的单帧三元组 [A, B, C]
+     - 字段：a_ns, b_ns, c_ns, refresh_period_ns
+     - 计算指标：frame_latency_ns (C-A), frame_production_ns (B-A),
+                 sf_submission_ns (C-B), jank_indicator, is_jank
+     - compute_metrics() 方法自动完成指标计算
+
+   • GfxInfoFramestats
+     - 对应 dumpsys gfxinfo <pkg> framestats 的 CSV 单帧记录
+     - 保留 IntendedVsync / Vsync / FrameCompleted 三列核心时间戳
+     - 原始 121 列全量数据存入 raw 字典，便于后续扩展
+
+   • LocalLatencySnapshot
+     - 一次采集周期的聚合快照
+     - 聚合指标：fps, jank_count, avg_frame_latency_ms, max_frame_latency_ms,
+                 p95_frame_latency_ms, avg_frame_production_ms, avg_sf_submission_ms
+     - 状态字段：state (NORMAL / LOCAL_LAG / HIGH_LATENCY / HIGH_JANK / STUTTER / FREEZE)
+
+   • LocalLatencyLabel
+     - 可直接用于构建训练数据集的高质量标注样本
+     - 融合 SurfaceFlinger 帧时序 + OCR 卡顿检测结果 + Traffic 网络状态
+     - 字段：label_state, local_latency_ms, jank_count_window, fps,
+             ocr_is_lag, ocr_fps, network_state, confidence, raw_features
+
+3. local_latency/collector.py
+   ---------------------------
+   基于 ADB 的非侵入式数据采集器，核心方法：
+
+   • resolve_surface_name()
+     - 执行 `adb shell dumpsys SurfaceFlinger --list | grep <package>`
+     - 自动解析目标应用对应的 Surface 完整名称
+     - 结果缓存 30 秒，避免重复 ADB 调用
+
+   • collect_surfaceflinger_latency()
+     - 执行 `adb shell dumpsys SurfaceFlinger --latency "<surface>"`
+     - 解析第一行的 refresh_period（刷新周期，纳秒）
+     - 解析后续最多 128 行的三元组 [A, B, C]
+     - 过滤无效占位符（全 0 或异常值）
+     - 返回 (refresh_period_ns, List[(A, B, C)])
+
+   • collect_gfxinfo_framestats()
+     - 执行 `adb shell dumpsys gfxinfo <pkg> framestats`
+     - 提取 ---PROFILEDATA--- 到 ---PROFILEDATAEND--- 之间的 CSV 数据
+     - 返回 List[dict]，每帧一个字典
+
+   • collect_cpu_gpu_mem()
+     - 轻量级系统性能遥测（辅助根因标注）
+     - CPU：dumpsys cpuinfo 整体占用
+     - GPU：尝试高通 (/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage)
+            和联发科 (/sys/class/misc/mali0/device/utilization) 两条路径
+     - 内存：dumpsys meminfo <pkg> 的 TOTAL PSS
+
+4. local_latency/analyzer.py
+   --------------------------
+   数据分析与标注生成器，核心方法：
+
+   • analyze_surfaceflinger(refresh_period_ns, raw_records)
+     - 将原始三元组解析为 FrameLatencyRecord 列表
+     - 计算每帧的 frame_latency_ns / frame_production_ns / sf_submission_ns
+     - jank 判定逻辑：当 ceil((C-A)/refresh_period) 在连续帧间发生变化时，
+       标记 is_jank = True（与报告中定义完全一致）
+
+   • analyze_gfxinfo(raw_rows)
+     - 解析 CSV 行，构建 GfxInfoFramestats 列表
+
+   • build_snapshot(surface_name, refresh_period_ns, sf_records, gfx_records)
+     - 聚合计算：FPS、jank_count、avg/max/p95 帧延迟
+     - 状态分类规则（基于报告中的行业经验值）：
+       * FREEZE    : fps < 5
+       * STUTTER   : jank 帧占比 >= 15% 或单窗口 jank >= 3 次
+       * HIGH_LATENCY : >=30% 的帧延迟 > 33.3ms（<30fps 体验线）
+       * LOCAL_LAG : 存在 jank 或 max 帧延迟 > 33.3ms
+       * NORMAL    : 无异常
+
+   • build_label(snapshot, ocr_latest, network_state)
+     - 融合 OCR 卡顿标志和 Traffic 网络状态，生成 LocalLatencyLabel
+     - 标注置信度策略：
+       * 基础置信度来自状态分类的 confidence
+       * 采集帧数 >= 60 时 +0.05，< 10 时 -0.2
+       * OCR 与本地时延同时检测到异常时 +0.08
+       * OCR 检测到卡顿但 SurfaceFlinger 认为 NORMAL 时，降级为 LOCAL_LAG
+     - 本地时延估计值采用 p95 帧延迟（保守估计，符合工业界惯例）
+
+5. local_latency/service.py
+   -------------------------
+   子模块服务适配层，对外暴露标准接口：
+
+   • start() / stop() —— 生命周期管理
+   • _run_loop() —— 后台线程，每 1.5 秒（默认）执行一次完整采集
+   • _collect_once() —— 单次采集流程：
+     1. 采集 SurfaceFlinger --latency
+     2. 每 3 次采集执行 1 次 gfxinfo framestats（降低 ADB 开销）
+     3. 构建聚合快照并缓存
+   • get_snapshot() —— 返回主控层所需的标准快照字典
+   • generate_label(ocr_latest, network_state) —— 生成融合标注样本
+   • get_label_history() / get_latest_label() —— 获取标注历史
+
+================================================================================
+三、修改文件（6 个）
+================================================================================
+
+1. config.py
+   ----------
+   在 ProjectConfig 数据类中新增 3 个字段：
+
+     enable_local_latency: bool = True
+     local_latency_package_name: Optional[str] = None
+     local_latency_interval: float = 1.5
+
+   作用：控制本地时延模块的开关、目标包名和采集间隔。
+
+2. main.py
+   --------
+   新增 3 个命令行参数：
+
+     --disable-local-latency        关闭本地时延采集模块（默认开启）
+     --local-latency-package        本地时延目标包名，不传则自动映射
+     --local-latency-interval       SurfaceFlinger 采集间隔，默认 1.5 秒
+
+   同步更新 ProjectConfig 和 OrchestratorConfig 的构造调用，传入新增参数。
+
+   [附注] 本次改动同时修复了 main.py 第 1 行原有的语法错误 "cd\"\"\"" -> "\"\"\""
+   （原文件中的三引号字符串被错误地写成了 cd"""，导致 Python 无法解析）。
+
+3. core/orchestrator.py
+   ---------------------
+   主要改动点：
+
+   a) 导入 LocalLatencyModuleService
+   b) OrchestratorConfig 新增 enable_local_latency / local_latency_package_name /
+      local_latency_interval 三个字段
+   c) MasterOrchestrator.__init__ 中初始化 local_latency_service：
+      - 若 enable_local_latency 为 True，根据 target_app 自动解析包名
+        （复用 traffic.config.APP_PACKAGE_MAP 映射表）
+      - 传入 package_name / device_id / collect_interval 创建服务实例
+   d) 新增 _resolve_local_latency_package() 静态方法，实现包名自动映射
+   e) run() 主循环中：
+      - 启动 local_latency_service（若启用）
+      - 每轮循环获取 local_latency_snapshot
+      - 调用 local_latency_service.generate_label() 生成本地时延标注
+        （传入 ocr_latest 和 traffic 网络状态，实现多模态对齐）
+      - 将 local_latency_snapshot 和 label 写入 result_hub
+      - 停止时按正确顺序关闭 local_latency_service
+   f) _collect_recent_events() 增加 local_latency_snapshot 参数，
+      在事件摘要中输出本地时延状态、FPS、jank 数
+
+4. core/result_hub.py
+   -------------------
+   主要改动点：
+
+   a) __init__ 中新增两个 jsonl 文件句柄：
+      - local_latency_jsonl  -> run_{ts}/local_latency_events.jsonl
+      - local_latency_label_jsonl -> run_{ts}/local_latency_labels.jsonl
+   b) 新增 append_local_latency(snapshot) 方法
+   c) 新增 append_local_latency_label(label) 方法
+   d) fusion_csv 表头新增 6 列本地时延字段：
+      - local_latency_state
+      - local_latency_confidence
+      - local_latency_fps
+      - local_latency_jank_count
+      - local_latency_avg_ms
+      - local_latency_p95_ms
+   e) append_fusion() 写入 CSV 时填充上述 6 列
+   f) close() 中关闭新增的两个文件句柄
+
+5. core/fusion.py
+   ---------------
+   主要改动点：
+
+   a) fuse_states() 函数签名增加 local_latency_snapshot 参数
+   b) 提取本地时延关键变量：
+      - ll_state, ll_conf, ll_jank, ll_fps
+   c) 新增本地时延高优先级决策分支：
+      - 若 ll_conf >= 0.85 且 ll_state 为 FREEZE / STUTTER：
+        直接判定为 BUFFERING（FREEZE）或 NETWORK_ISSUE（STUTTER），
+        理由为 "local_latency_freeze/stutter_high_confidence"
+   d) 修改 ocr_lag == "是" 且无规则强信号时的分支：
+      - 若本地时延也异常（LOCAL_LAG / HIGH_LATENCY），优先判定为
+        APP_INTERNAL_ERROR（本地导致的卡顿），而非 BUFFERING（网络导致的卡顿）
+   e) 新增本地时延与 OCR 一致时的置信度加分规则：
+      - "local_latency_ocr_agree_boost"
+   f) 返回字典中新增 "local_latency" 键，包含完整本地时延子字段：
+      state, confidence, fps, jank_count, avg_frame_latency_ms,
+      max_frame_latency_ms, p95_frame_latency_ms, avg_frame_production_ms,
+      avg_sf_submission_ms, frame_count, errors
+
+6. core/dashboard.py
+   ------------------
+   主要改动点：
+
+   a) render_dashboard() 函数签名增加 local_latency_snapshot 参数
+   b) 综合状态行新增本地时延状态输出：
+      "local={state}:{confidence:.2f}"
+   c) 若 local_latency_snapshot 存在，新增 [本地时延子模块] 展示区域，包含：
+      - 采集次数、错误数、state、confidence、FPS、jank 数
+      - avg_latency (ms)、p95_latency (ms)、max_latency (ms)、frame_count
+
+================================================================================
+四、技术实现与报告的对应关系
+================================================================================
+
+| 报告技术点                              | 代码实现位置                        |
+|----------------------------------------|-------------------------------------|
+| `dumpsys SurfaceFlinger --latency`     | local_latency/collector.py:55-86   |
+| 128 帧三元组 [A,B,C] 解析               | local_latency/collector.py:75-82   |
+| refresh_period 第一行解析               | local_latency/collector.py:69-72   |
+| 帧延迟 = C - A                         | local_latency/models.py:35          |
+| 帧生成时间 = B - A                     | local_latency/models.py:36          |
+| SF 提交时间 = C - B                    | local_latency/models.py:37          |
+| jank 判定：ceil((C-A)/refresh_period)  | local_latency/analyzer.py:50-55    |
+| `dumpsys gfxinfo <pkg> framestats`     | local_latency/collector.py:89-118  |
+| CSV 格式 framestats 解析                | local_latency/collector.py:105-116 |
+| Perfetto FrameTimeline (预留扩展)       | collector.py 中已注释说明          |
+| 非侵入式、无需 root                     | 全部 ADB 命令均使用标准 shell 接口 |
+| 纳秒级精度                              | 全部时间戳以 int(纳秒) 存储         |
+| 构建高质量标注数据                      | LocalLatencyLabel + labels.jsonl   |
+| 网络/本地时延解耦                       | fusion.py 中本地时延优先分支        |
+
+================================================================================
+五、运行方式
+================================================================================
+
+  # 默认启动（本地时延模块自动开启）
+  python main.py --target-app 王者荣耀
+
+  # 指定本地时延目标包名和采集间隔
+  python main.py --target-app 王者荣耀 \
+                 --local-latency-package com.tencent.tmgp.sgame \
+                 --local-latency-interval 1.0
+
+  # 关闭本地时延模块
+  python main.py --target-app 王者荣耀 --disable-local-latency
+
+================================================================================
+六、输出数据说明
+================================================================================
+
+运行后会在 results/run_YYYYMMDD_HHMMSS/ 目录下生成：
+
+  • local_latency_events.jsonl   —— 原始帧时序聚合快照（每秒 1-2 条）
+  • local_latency_labels.jsonl   —— 高质量标注样本（可直接用于模型训练）
+  • fused_states.csv             —— 融合状态表（新增 6 列本地时延指标）
+
+标注样本示例（local_latency_labels.jsonl）：
+{
+  "timestamp": "2026-05-26 23:00:00",
+  "type": "local_latency_label",
+  "data": {
+    "label_state": "STUTTER",
+    "local_latency_ms": 45.2,
+    "jank_count_window": 5,
+    "avg_frame_latency_ms": 28.5,
+    "max_frame_latency_ms": 62.1,
+    "p95_frame_latency_ms": 45.2,
+    "fps": 52.3,
+    "ocr_is_lag": true,
+    "ocr_fps": "60",
+    "network_state": "NORMAL_OR_NO_STRONG_EVIDENCE",
+    "confidence": 0.93,
+    "raw_features": { ... }
+  }
+}
+
+================================================================================
+七、设计亮点
+================================================================================
+
+1. 完全非侵入式：仅通过标准 ADB 命令获取数据，无需 root、无需修改游戏代码。
+2. 纳秒级精度：直接采用 Android SurfaceFlinger 原生输出的纳秒时间戳。
+3. 自动 Surface 解析：通过 `dumpsys SurfaceFlinger --list` 自动查找目标包名
+   对应的 Surface 完整名称，避免手动硬编码。
+4. 多模态对齐标注：将 SurfaceFlinger 帧时序与 OCR 卡顿检测、Traffic 网络状态
+   进行时间对齐和置信度融合，生成可直接用于监督学习的高质量标注样本。
+5. 低开销设计：gfxinfo framestats 每 3 次采集执行 1 次；Surface 名称缓存 30 秒；
+   后台 daemon 线程独立运行，不阻塞主控循环。
+6. 状态机增强：fusion.py 中新增本地时延高优先级分支，可更准确地区分
+   "网络导致的卡顿" 与 "本地渲染导致的卡顿"。
+
+================================================================================

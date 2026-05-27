@@ -28,3 +28,7 @@ class ProjectConfig:
     traffic_package_name: Optional[str] = None  # 如 com.duowan.kiwi，None 时自动映射
     enable_traffic_pcap: bool = True
     traffic_window_seconds: float = 12.0
+    # Local Latency 子模块配置
+    enable_local_latency: bool = True
+    local_latency_package_name: Optional[str] = None  # 目标游戏包名，None 时按 target-app 自动映射
+    local_latency_interval: float = 1.5  # SurfaceFlinger 采集间隔（秒）

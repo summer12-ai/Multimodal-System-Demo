@@ -25,6 +25,8 @@ class UnifiedResultHub:
         self.fusion_jsonl = (self.run_dir / "fused_states.jsonl").open("a", encoding="utf-8")
         self.traffic_jsonl = (self.run_dir / "traffic_events.jsonl").open("a", encoding="utf-8")
         self.ground_truth_jsonl = (self.run_dir / "ground_truth_eval.jsonl").open("a", encoding="utf-8")
+        self.local_latency_jsonl = (self.run_dir / "local_latency_events.jsonl").open("a", encoding="utf-8")
+        self.local_latency_label_jsonl = (self.run_dir / "local_latency_labels.jsonl").open("a", encoding="utf-8")
         self.fusion_csv_fh = (self.run_dir / "fused_states.csv").open("a", encoding="utf-8-sig", newline="")
         self.fusion_csv = csv.DictWriter(
             self.fusion_csv_fh,
@@ -49,6 +51,12 @@ class UnifiedResultHub:
                 "traffic_rx_rate",
                 "traffic_rssi",
                 "traffic_resolution",
+                "local_latency_state",
+                "local_latency_confidence",
+                "local_latency_fps",
+                "local_latency_jank_count",
+                "local_latency_avg_ms",
+                "local_latency_p95_ms",
             ],
         )
         self.fusion_csv.writeheader()
@@ -82,6 +90,14 @@ class UnifiedResultHub:
         payload = {"timestamp": self._now(), "type": "ground_truth", "data": eval_result}
         self._write_jsonl(self.ground_truth_jsonl, payload)
 
+    def append_local_latency(self, snapshot: Dict[str, Any]):
+        payload = {"timestamp": self._now(), "type": "local_latency", "data": snapshot}
+        self._write_jsonl(self.local_latency_jsonl, payload)
+
+    def append_local_latency_label(self, label: Dict[str, Any]):
+        payload = {"timestamp": self._now(), "type": "local_latency_label", "data": label}
+        self._write_jsonl(self.local_latency_label_jsonl, payload)
+
     def append_fusion(self, fusion: Dict[str, Any]):
         payload = {"timestamp": self._now(), "type": "fusion", "data": fusion}
         self._write_jsonl(self.fusion_jsonl, payload)
@@ -107,6 +123,12 @@ class UnifiedResultHub:
                 "traffic_rx_rate": (fusion.get("traffic") or {}).get("rx_rate", 0.0),
                 "traffic_rssi": (fusion.get("traffic") or {}).get("rssi", ""),
                 "traffic_resolution": (fusion.get("traffic") or {}).get("resolution", ""),
+                "local_latency_state": (fusion.get("local_latency") or {}).get("state", ""),
+                "local_latency_confidence": (fusion.get("local_latency") or {}).get("confidence", 0.0),
+                "local_latency_fps": (fusion.get("local_latency") or {}).get("fps", 0.0),
+                "local_latency_jank_count": (fusion.get("local_latency") or {}).get("jank_count", 0),
+                "local_latency_avg_ms": (fusion.get("local_latency") or {}).get("avg_frame_latency_ms", 0.0),
+                "local_latency_p95_ms": (fusion.get("local_latency") or {}).get("p95_frame_latency_ms", 0.0),
             }
         )
         self.fusion_csv_fh.flush()
@@ -118,4 +140,6 @@ class UnifiedResultHub:
         self.fusion_jsonl.close()
         self.traffic_jsonl.close()
         self.ground_truth_jsonl.close()
+        self.local_latency_jsonl.close()
+        self.local_latency_label_jsonl.close()
         self.fusion_csv_fh.close()

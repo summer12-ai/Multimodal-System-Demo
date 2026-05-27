@@ -31,6 +31,9 @@ def parse_args():
     parser.add_argument("--traffic-package", default=None, help="目标 App 包名（如 com.duowan.kiwi），不传则按 target-app 自动映射")
     parser.add_argument("--disable-traffic-pcap", action="store_true", help="关闭 tcpdump 包级采集（仅保留统计层）")
     parser.add_argument("--traffic-window-sec", type=float, default=12.0, help="Traffic 状态机时间窗（秒）")
+    parser.add_argument("--disable-local-latency", action="store_true", help="关闭本地时延采集模块（默认开启）")
+    parser.add_argument("--local-latency-package", default=None, help="本地时延目标包名（如 com.tencent.tmgp.sgame），不传则按 target-app 自动映射")
+    parser.add_argument("--local-latency-interval", type=float, default=1.5, help="SurfaceFlinger 采集间隔（秒），默认 1.5")
     return parser.parse_args()
 
 
@@ -62,6 +65,9 @@ def main():
         traffic_package_name=args.traffic_package,
         enable_traffic_pcap=not args.disable_traffic_pcap,
         traffic_window_seconds=args.traffic_window_sec,
+        enable_local_latency=not args.disable_local_latency,
+        local_latency_package_name=args.local_latency_package,
+        local_latency_interval=args.local_latency_interval,
     )
 
     orch_cfg = OrchestratorConfig(
@@ -82,6 +88,9 @@ def main():
         traffic_package_name=proj_cfg.traffic_package_name,
         enable_traffic_pcap=proj_cfg.enable_traffic_pcap,
         traffic_window_seconds=proj_cfg.traffic_window_seconds,
+        enable_local_latency=proj_cfg.enable_local_latency,
+        local_latency_package_name=proj_cfg.local_latency_package_name,
+        local_latency_interval=proj_cfg.local_latency_interval,
     )
 
     orchestrator = MasterOrchestrator(orch_cfg)

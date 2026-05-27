@@ -19,7 +19,7 @@ def _map_rule_state(rule_state: str) -> str:
     return mapping.get(rule_state, "UNKNOWN")
 
 
-def fuse_states(ocr_snapshot: Dict[str, Any], log_snapshot: Dict[str, Any], traffic_snapshot: Dict[str, Any], target_app: str) -> Dict[str, Any]:
+def fuse_states(ocr_snapshot: Dict[str, Any], log_snapshot: Dict[str, Any], traffic_snapshot: Dict[str, Any], local_latency_snapshot: Dict[str, Any], target_app: str) -> Dict[str, Any]:
     """
     将 OCR 与 logcat 的最新状态融合为一个候选业务状态。
     当前为规则/启发式版本，后续可替换为统计模型或学习模型。
@@ -42,12 +42,24 @@ def fuse_states(ocr_snapshot: Dict[str, Any], log_snapshot: Dict[str, Any], traf
     tr_resolution = tr_proto.get("hls_resolution") or tr_proto.get("dash_resolution") or ""
     tr_bitrate = tr_proto.get("hls_bandwidth") or tr_proto.get("dash_bandwidth") or 0
 
+    # 本地时延层输入
+    ll_latest = (local_latency_snapshot.get("latest_result") or {}) if local_latency_snapshot else {}
+    ll_state = ll_latest.get("state", "UNKNOWN")
+    ll_conf = float(ll_latest.get("confidence", 0.0)) if local_latency_snapshot else 0.0
+    ll_jank = int(ll_latest.get("jank_count", 0)) if local_latency_snapshot else 0
+    ll_fps = float(ll_latest.get("fps", 0.0)) if local_latency_snapshot else 0.0
+
     final_state = "NORMAL_OR_NO_STRONG_EVIDENCE"
     reasons = []
     final_conf = 0.55
 
+    # 本地时延高置信度异常优先：若 SurfaceFlinger 检测到 FREEZE / STUTTER，直接判定
+    if ll_conf >= 0.85 and ll_state in ("FREEZE", "STUTTER"):
+        final_state = "BUFFERING" if ll_state == "FREEZE" else "NETWORK_ISSUE"
+        final_conf = ll_conf
+        reasons.append(f"local_latency_{ll_state.lower()}_high_confidence")
     # Ground Truth 优先：Traffic 高置信度时权重最高
-    if tr_conf >= 0.90 and tr_state != "UNKNOWN":
+    elif tr_conf >= 0.90 and tr_state != "UNKNOWN":
         final_state = tr_state
         final_conf = tr_conf
         reasons.append("traffic_ground_truth_high_confidence")
@@ -71,9 +83,15 @@ def fuse_states(ocr_snapshot: Dict[str, Any], log_snapshot: Dict[str, Any], traf
             final_conf = min(0.95, max(final_conf, llm_conf + 0.1))
             reasons.append("llm_supports_network_abnormal")
     elif ocr_lag == "是":
-        final_state = "BUFFERING"
-        final_conf = 0.7
-        reasons.append("ocr_lag_signal")
+        # 若本地时延也异常，优先判定为本地导致的卡顿（而非网络 BUFFERING）
+        if ll_state in ("LOCAL_LAG", "HIGH_LATENCY") and ll_conf >= 0.6:
+            final_state = "APP_INTERNAL_ERROR"
+            final_conf = max(0.75, ll_conf)
+            reasons.append("ocr_lag_and_local_latency_high")
+        else:
+            final_state = "BUFFERING"
+            final_conf = 0.7
+            reasons.append("ocr_lag_signal")
     elif rule_state in {"PLAY_INIT", "PAGE_SWITCH"}:
         final_state = rule_state
         final_conf = max(0.65, rule_conf)
@@ -93,6 +111,11 @@ def fuse_states(ocr_snapshot: Dict[str, Any], log_snapshot: Dict[str, Any], traf
         final_state = tr_state
         final_conf = min(0.85, tr_conf)
         reasons.append("traffic_supports_abnormal")
+
+    # 本地时延与 OCR 一致时加分
+    if ll_state in ("LOCAL_LAG", "HIGH_LATENCY", "STUTTER") and ocr_lag == "是":
+        final_conf = min(0.97, max(final_conf, ll_conf + 0.05))
+        reasons.append("local_latency_ocr_agree_boost")
 
     # 规则与 LLM 一致时小幅加分
     if llm_state == rule_state and llm_state not in {"UNKNOWN", "NORMAL_OR_NO_STRONG_EVIDENCE"}:
@@ -142,5 +165,18 @@ def fuse_states(ocr_snapshot: Dict[str, Any], log_snapshot: Dict[str, Any], traf
             "rx_rate": (traffic_snapshot.get("net_stats") or {}).get("rx_rate", 0.0) if traffic_snapshot else 0.0,
             "rssi": (traffic_snapshot.get("net_stats") or {}).get("rssi") if traffic_snapshot else None,
             "errors": traffic_snapshot.get("errors", 0) if traffic_snapshot else 0,
+        },
+        "local_latency": {
+            "state": ll_state,
+            "confidence": ll_conf,
+            "fps": ll_fps,
+            "jank_count": ll_jank,
+            "avg_frame_latency_ms": ll_latest.get("avg_frame_latency_ms", 0.0),
+            "max_frame_latency_ms": ll_latest.get("max_frame_latency_ms", 0.0),
+            "p95_frame_latency_ms": ll_latest.get("p95_frame_latency_ms", 0.0),
+            "avg_frame_production_ms": ll_latest.get("avg_frame_production_ms", 0.0),
+            "avg_sf_submission_ms": ll_latest.get("avg_sf_submission_ms", 0.0),
+            "frame_count": ll_latest.get("frame_count", 0),
+            "errors": local_latency_snapshot.get("errors", 0) if local_latency_snapshot else 0,
         },
     }

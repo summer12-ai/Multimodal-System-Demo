@@ -24,6 +24,7 @@ def render_dashboard(
     ocr_snapshot: Dict[str, Any],
     log_snapshot: Dict[str, Any],
     traffic_snapshot: Dict[str, Any],
+    local_latency_snapshot: Dict[str, Any],
     recent_events: List[str],
 ):
     """
@@ -45,7 +46,8 @@ def render_dashboard(
     print(
         f"rule={fusion_state.get('rule_state', '')}:{fusion_state.get('rule_confidence', 0.0):.2f} | "
         f"llm={fusion_state.get('llm_state', 'N/A')}:{fusion_state.get('llm_confidence', 0.0):.2f} | "
-        f"traffic={fusion_state.get('traffic_state', 'N/A')}:{fusion_state.get('traffic_confidence', 0.0):.2f}"
+        f"traffic={fusion_state.get('traffic_state', 'N/A')}:{fusion_state.get('traffic_confidence', 0.0):.2f} | "
+        f"local={fusion_state.get('local_latency', {}).get('state', 'N/A')}:{fusion_state.get('local_latency', {}).get('confidence', 0.0):.2f}"
     )
     print("-" * 100)
     print("[OCR 子模块]")
@@ -105,6 +107,24 @@ def render_dashboard(
                 f"3way={acc.get('three_way_agree')} | "
                 f"discrepancy={acc.get('discrepancy', False)}"
             )
+        print("-" * 100)
+    if local_latency_snapshot:
+        ll_latest = local_latency_snapshot.get("latest_result") or {}
+        print("[本地时延子模块]")
+        print(
+            f"collects={local_latency_snapshot.get('events', 0)} | "
+            f"errors={local_latency_snapshot.get('errors', 0)} | "
+            f"state={_safe(ll_latest.get('state', 'UNKNOWN'))} | "
+            f"conf={float(ll_latest.get('confidence', 0.0)):.2f} | "
+            f"fps={float(ll_latest.get('fps', 0.0)):.1f} | "
+            f"jank={ll_latest.get('jank_count', 0)}"
+        )
+        print(
+            f"avg_latency={float(ll_latest.get('avg_frame_latency_ms', 0.0)):.2f}ms | "
+            f"p95_latency={float(ll_latest.get('p95_frame_latency_ms', 0.0)):.2f}ms | "
+            f"max_latency={float(ll_latest.get('max_frame_latency_ms', 0.0)):.2f}ms | "
+            f"frames={ll_latest.get('frame_count', 0)}"
+        )
         print("-" * 100)
     print("[最近事件摘要]")
     if not recent_events:
