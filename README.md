@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 
-一个主控多模块演示项目，通过 **OCR + Logcat + Traffic** 融合实现实时 Android 应用状态识别。
+一个主控多模块演示项目，通过 **OCR + Logcat + Traffic + Local Latency** 四模态融合实现实时 Android 应用状态识别。
 
 ## 概述
 
@@ -12,8 +12,9 @@
 - **OCR 模块**：ADB 截图 + PaddleOCR 离线识别。从 UI 文本中提取分辨率、卡顿提示、FPS 及游戏时延（ms）。
 - **Logcat 模块**：实时 `adb logcat` 采集，支持结构化解析、模板归一化、时间窗口规则检测，以及可选的 LLM 语义增强。
 - **Traffic 模块**：使用 root 权限采集网络统计信息（`dumpsys netstats`、`/proc/<pid>/net/tcp`）和数据包级捕获（`tcpdump`）。识别播放状态、缓冲和网络问题。作为评估 OCR/Logcat 准确性的**基准真值（Ground Truth）**。
+- **Local Latency 模块**：基于 `dumpsys SurfaceFlinger --latency` / `dumpsys gfxinfo <pkg> framestats` 非侵入式采集游戏帧级纳秒级时序数据，计算帧延迟、jank、FPS 等指标，构建高质量本地时延标注数据集。
 
-主控层融合所有三个模块的输出，渲染统一监控面板，并归档结构化结果。
+主控层融合所有四个模块的输出，渲染统一监控面板，并归档结构化结果。
 
 ---
 
@@ -59,6 +60,12 @@
 │   └── analyzer/
 │       ├── bandwidth_analyzer.py
 │       └── state_detector.py
+├── local_latency/           # 本地时延子模块
+│   ├── __init__.py
+│   ├── models.py
+│   ├── collector.py
+│   ├── analyzer.py
+│   └── service.py
 ├── results/                 # 自动创建 run_YYYYMMDD_HHMMSS/
 ├── requirements.txt
 └── README.md
@@ -149,6 +156,9 @@ python main.py --target-app 虎牙直播 --enable-llm-log-analysis --llm-provide
 | `--traffic-package` | `None` | 目标包名（例如 `com.duowan.kiwi`） |
 | `--disable-traffic-pcap` | `False` | 禁用 tcpdump，仅保留统计层 |
 | `--traffic-window-sec` | `12.0` | Traffic 状态机窗口 |
+| `--disable-local-latency` | `False` | 禁用本地时延模块 |
+| `--local-latency-package` | `None` | 本地时延目标包名（如 `com.tencent.tmgp.sgame`） |
+| `--local-latency-interval` | `1.5` | SurfaceFlinger 采集间隔（秒） |
 
 ---
 
@@ -165,6 +175,8 @@ python main.py --target-app 虎牙直播 --enable-llm-log-analysis --llm-provide
 | `ground_truth_eval.jsonl` | 基准真值对齐评估 |
 | `fused_states.jsonl` | 融合状态决策 |
 | `fused_states.csv` | 融合状态表（CSV） |
+| `local_latency_events.jsonl` | 本地时延聚合快照（帧延迟/jank/FPS） |
+| `local_latency_labels.jsonl` | 本地时延标注样本（可直接用于训练） |
 
 终端监控面板会实时显示所有模块和融合状态的摘要。
 
@@ -181,9 +193,25 @@ python main.py --target-app 虎牙直播 --enable-llm-log-analysis --llm-provide
 - **匹配格式**：`20ms`、`Ping:25`、`Latency: 30`、`延迟: 60`、`网络 45` 等。
 - **实现方式**：先对全图 OCR 识别，若未命中，则对重点检测区域裁剪拼接后二次识别，提升小字/半透明 UI 的识别率。
 
+### Local Latency 模块流水线
+
+基于 Android 原生 SurfaceFlinger / gfxinfo 接口，**完全非侵入式、无需 root**：
+
+1. **Surface 自动解析**：执行 `dumpsys SurfaceFlinger --list` 自动查找目标包名对应的 Surface 完整名称，兼容新旧 Android 格式。
+2. **帧时序采集**：执行 `dumpsys SurfaceFlinger --latency <surface>` 获取最多 128 帧三元组 `[A, B, C]`（应用绘制时间 / vsync 前提交时间 / 提交完成时间），精度为纳秒级。
+3. **gfxinfo 备选**：当 SurfaceFlinger 仅返回刷新周期时，自动退化为 `dumpsys gfxinfo <pkg> framestats` 的 CSV 帧数据。
+4. **核心指标计算**：
+   - 帧延迟 = C − A
+   - jank 判定：`ceil((C−A)/refresh_period)` 在连续帧间发生变化时
+   - FPS 估算、avg/max/p95 帧延迟统计
+5. **状态分类**：NORMAL / LOCAL_LAG / HIGH_LATENCY / STUTTER / FREEZE
+6. **多模态标注**：将帧时序数据与 OCR 卡顿检测、Traffic 网络状态进行时间对齐，生成可直接用于监督学习的高质量标注样本。
+
 ### 状态融合规则
 
 Traffic 作为物理层基准真值。当 Traffic 置信度 >= 0.90 时，其状态将覆盖 OCR/Logcat 的决策。
+
+**本地时延高优先级**：当 Local Latency 以 >= 0.85 置信度检测到 `FREEZE` 或 `STUTTER` 时，融合状态将优先反映本地渲染异常。
 
 ### Traffic 模块流水线
 
@@ -201,6 +229,8 @@ Traffic 作为物理层基准真值。当 Traffic 置信度 >= 0.90 时，其状
 - Traffic 协议深度解析（HLS/DASH 负载）依赖 tcpdump ASCII 输出；TLS/QUIC 加密流无法解析。
 - OCR + Logcat 融合规则是第一代启发式规则；数据驱动校准是未来工作。
 - Traffic `pcap` 采集器在接口自动检测重试期间可能丢包（设备相关）。
+- SurfaceFlinger `--latency` 在部分新系统上仅返回刷新周期，此时自动退化为 `gfxinfo framestats` 数据源。
+- `gfxinfo framestats` 的 CSV 结束标记因 Android 版本而异（`---PROFILEDATAEND---` 或第二个 `---PROFILEDATA---`），已做兼容处理。
 
 ---
 
