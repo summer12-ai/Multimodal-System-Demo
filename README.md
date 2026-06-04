@@ -31,7 +31,8 @@
 │   └── result_hub.py        # 统一输出（JSONL + CSV）
 ├── ocr/                     # OCR 子模块
 │   ├── service.py
-│   ├── adb_controller.py
+│   ├── frame_source.py      # 截图源抽象接口（可插拔 ADB / scrcpy / minicap）
+│   ├── adb_controller.py    # （保留，供 ADBFrameSource 内部使用）
 │   ├── analyzer.py
 │   ├── config.py
 │   ├── image_utils.py
@@ -207,6 +208,58 @@ python main.py --target-app 虎牙直播 --enable-llm-log-analysis --llm-provide
 5. **状态分类**：NORMAL / LOCAL_LAG / HIGH_LATENCY / STUTTER / FREEZE
 6. **多模态标注**：将帧时序数据与 OCR 卡顿检测、Traffic 网络状态进行时间对齐，生成可直接用于监督学习的高质量标注样本。
 
+### OCR 截图源可插拔架构
+
+OCR 模块采用 **生产者-消费者模型**，截图线程与 OCR 推理线程完全解耦：
+
+- **生产者线程**（`capture_loop`）：通过 `FrameSource` 接口持续取帧，放入 `queue.Queue(maxsize=3)`。当 OCR 推理慢于截图时，队列满自动丢弃旧帧（背压控制），始终保留最新画面。
+- **消费者线程**（`process_loop`）：从队列阻塞取帧，执行 PaddleOCR 分析，存储结果。
+- **`FrameSource` 抽象基类**：所有截图后端必须实现 `start() / get_frame() / stop() / max_fps` 四个接口。
+
+当前默认后端为 `ADBFrameSource`（`adb exec-out screencap -p`），兼容性好、零额外依赖。未来可一行代码切换为 `ScrcpyFrameSource`（H.264 视频流，10-60fps），`OcrModuleService` 上层代码**完全无需改动**。
+
+### 高帧率前瞻：ADB → scrcpy 切换指南
+
+当前 `adb exec-out screencap` 方案的理论帧率上限约为 **5fps**（单次截图+传输最低 50-150ms）。当业务需要 **10fps+ 连续帧**（帧间差分、光流法、HASTE 卡顿检测等）时，必须升级为视频流方案。
+
+| 维度 | ADBFrameSource（当前） | ScrcpyFrameSource（推荐） |
+|------|------------------------|---------------------------|
+| 协议 | `exec-out screencap -p` | scrcpy-server H.264 socket |
+| 帧率上限 | ~5fps | 30-60fps |
+| 延迟 | ~100ms | <50ms |
+| 手机端 CPU | 中等（截图+PNG编码） | 极低（MediaCodec 硬件编码） |
+| 外部依赖 | 零 | `scrcpy-server.jar` + PC 端 H.264 解码器 |
+| 维护状态 | 稳定 | **活跃维护**（Genymobile） |
+
+**minicap 不推荐**：OpenSTF 项目已 archived，Android 12+ 新 SurfaceFlinger 架构兼容性存疑，长期维护风险高。
+
+#### 切换步骤（仅需修改一行代码）
+
+在 `core/orchestrator.py` 中：
+
+```python
+# 当前（1fps，零额外依赖）
+from ocr.frame_source import ADBFrameSource
+frame_source = ADBFrameSource(device_id=cfg.device_id)
+
+# 未来高帧率时（10-60fps，需先实现 ScrcpyFrameSource）
+# from ocr.frame_source import ScrcpyFrameSource
+# frame_source = ScrcpyFrameSource(device_id=cfg.device_id, max_fps=30)
+
+self.ocr_service = OcrModuleService(
+    target_app=cfg.target_app,
+    frame_source=frame_source,   # ← 接口不变，上层零改动
+)
+```
+
+`ocr/frame_source.py` 文件末尾已预留 `ScrcpyFrameSource` 完整骨架代码，实现要点：
+
+1. `push` `scrcpy-server.jar` 到设备 `/data/local/tmp/`。
+2. `adb forward tcp:27183 localabstract:scrcpy` 建立隧道。
+3. 通过 `app_process` 启动服务端（无需 root）。
+4. socket 读取 H.264 nal units，送入 `av.codec.Context`（PyAV）或 `cv2.VideoCapture` 解码。
+5. `get_frame()` 从解码器输出队列中取出最新 `PIL.Image`。
+
 ### 状态融合规则
 
 Traffic 作为物理层基准真值。当 Traffic 置信度 >= 0.90 时，其状态将覆盖 OCR/Logcat 的决策。
@@ -231,6 +284,7 @@ Traffic 作为物理层基准真值。当 Traffic 置信度 >= 0.90 时，其状
 - Traffic `pcap` 采集器在接口自动检测重试期间可能丢包（设备相关）。
 - SurfaceFlinger `--latency` 在部分新系统上仅返回刷新周期，此时自动退化为 `gfxinfo framestats` 数据源。
 - `gfxinfo framestats` 的 CSV 结束标记因 Android 版本而异（`---PROFILEDATAEND---` 或第二个 `---PROFILEDATA---`），已做兼容处理。
+- OCR 当前截图上限约 5fps（`adb exec-out` 物理限制）；如需 10fps+ 连续帧，请参考 README「高帧率前瞻」章节切换为 scrcpy 方案。
 
 ---
 

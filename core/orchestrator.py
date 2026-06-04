@@ -12,6 +12,7 @@ from .fusion import fuse_states
 from .result_hub import UnifiedResultHub
 from logcat import LogcatModuleService
 from ocr import OcrModuleService
+from ocr.frame_source import ADBFrameSource
 from traffic import TrafficModuleService
 from local_latency import LocalLatencyModuleService
 
@@ -48,7 +49,10 @@ class MasterOrchestrator:
 
     def __init__(self, cfg: OrchestratorConfig):
         self.cfg = cfg
-        self.ocr_service = OcrModuleService(target_app=cfg.target_app, device_id=cfg.device_id)
+        # OCR 截图源：当前使用 ADBFrameSource（exec-out，~1-5fps）。
+        # 未来需要高帧率时，只需替换为 ScrcpyFrameSource，上层代码零改动。
+        frame_source = ADBFrameSource(device_id=cfg.device_id)
+        self.ocr_service = OcrModuleService(target_app=cfg.target_app, frame_source=frame_source)
         self.log_service = LogcatModuleService(
             device_id=cfg.device_id,
             window_seconds=cfg.log_window_seconds,
